@@ -1,0 +1,185 @@
+import com.google.gson.JsonObject;
+import com.google.gson.Gson;
+
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.BufferedReader;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+
+public class CurrencyConverterApp {
+
+    // Clase para almacenar la información de cada conversión
+    static class ConversionHistory {
+        private final double cantidadConvertida;
+        private final String monedaBase;
+        private final String monedaDestino;
+        private final double cantidadOriginal;
+        private final LocalDateTime timestamp;
+
+        public ConversionHistory(double cantidadOriginal, double cantidadConvertida, String monedaBase, String monedaDestino) {
+            this.cantidadOriginal = cantidadOriginal;
+            this.cantidadConvertida = cantidadConvertida;
+            this.monedaBase = monedaBase;
+            this.monedaDestino = monedaDestino;
+            this.timestamp = LocalDateTime.now(); // Marca de tiempo actual
+        }
+
+        @Override
+        public String toString() {
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+            return String.format("Conversión: %.2f %s -> %.2f %s | Fecha: %s",
+                    cantidadOriginal, monedaBase, cantidadConvertida, monedaDestino, timestamp.format(formatter));
+        }
+    }
+
+    // Método para obtener las tasas de cambio desde la API usando HttpClient
+    public static JsonObject obtenerTasasDeCambio() throws Exception {
+        String apiUrl = "https://v6.exchangerate-api.com/v6/caf281dae4e2865b41d72585/latest/USD";
+
+        // Crear un cliente HttpClient
+        HttpClient client = HttpClient.newHttpClient();
+
+        // Crear una solicitud HttpRequest
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(new URI(apiUrl))
+                .build();
+
+        // Enviar la solicitud y obtener la respuesta
+        HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+
+        // Comprobar el código de estado de la respuesta
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("Error al obtener tasas de cambio. Código de respuesta: " + response.statusCode());
+        }
+
+        // Leer la respuesta y convertirla a JsonObject
+        try (InputStream inputStream = response.body();
+             BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
+            StringBuilder responseBody = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                responseBody.append(line);
+            }
+
+            // Convertir la respuesta en formato JSON usando Gson
+            Gson gson = new Gson();
+            JsonObject responseJson = gson.fromJson(responseBody.toString(), JsonObject.class);
+
+            if ("success".equals(responseJson.get("result").getAsString())) {
+                return responseJson.getAsJsonObject("conversion_rates");
+            } else {
+                throw new RuntimeException("Error en la API: " + responseJson.get("error-type").getAsString());
+            }
+        }
+    }
+
+    // Método para convertir una cantidad de una moneda a otra
+    public static double convertirMoneda(double cantidad, String monedaBase, String monedaDestino, JsonObject rates) {
+        if (rates.has(monedaBase) && rates.has(monedaDestino)) {
+            double tasaBase = rates.get(monedaBase).getAsDouble();
+            double tasaDestino = rates.get(monedaDestino).getAsDouble();
+            return (cantidad / tasaBase) * tasaDestino;
+        } else {
+            throw new IllegalArgumentException("Moneda no encontrada en las tasas de cambio.");
+        }
+    }
+
+    // Método para mostrar el menú principal
+    public static void mostrarMenu() {
+        System.out.println("******************************************");
+        System.out.println("1. Convertir moneda");
+        System.out.println("2. Ver monedas disponibles");
+        System.out.println("3. Ver historial de conversiones");
+        System.out.println("4. Salir");
+        System.out.println("******************************************");
+        System.out.print("Selecciona una opción: ");
+    }
+
+    public static void main(String[] args) {
+        // Lista para almacenar el historial de conversiones
+        List<ConversionHistory> conversionHistoryList = new ArrayList<>();
+        Scanner scanner = new Scanner(System.in);
+        boolean continuar = true;
+
+        // Obtener tasas de cambio desde la API
+        JsonObject rates;
+        try {
+            rates = obtenerTasasDeCambio();
+        } catch (Exception e) {
+            System.err.println("Error al obtener las tasas de cambio: " + e.getMessage());
+            return;
+        }
+
+        while (continuar) {
+            mostrarMenu();  // Mostrar el menú
+            int opcion = scanner.nextInt();
+
+            switch (opcion) {
+                case 1:
+                    // Opción 1: Convertir moneda
+                    System.out.print("Ingrese la cantidad a convertir: ");
+                    double cantidad = scanner.nextDouble();
+
+                    // Mostrar monedas disponibles
+                    System.out.println("Monedas disponibles:");
+                    rates.keySet().forEach(System.out::println);
+
+                    // Leer las monedas base y destino
+                    System.out.print("Ingrese la moneda base (ej. USD): ");
+                    String monedaBase = scanner.next().toUpperCase();
+                    System.out.print("Ingrese la moneda destino (ej. EUR): ");
+                    String monedaDestino = scanner.next().toUpperCase();
+
+                    try {
+                        if (!rates.has(monedaBase) || !rates.has(monedaDestino)) {
+                            System.out.println("Moneda base o destino no válida.");
+                            break;
+                        }
+                        double cantidadConvertida = convertirMoneda(cantidad, monedaBase, monedaDestino, rates);
+                        System.out.printf("%.2f %s equivale a %.2f %s\n", cantidad, monedaBase, cantidadConvertida, monedaDestino);
+
+                        // Agregar la conversión al historial
+                        ConversionHistory history = new ConversionHistory(cantidad, cantidadConvertida, monedaBase, monedaDestino);
+                        conversionHistoryList.add(history);
+                        System.out.println("Operación completada correctamente.");
+                    } catch (IllegalArgumentException e) {
+                        System.out.println("Error: " + e.getMessage());
+                    }
+                    break;
+
+                case 2:
+                    // Opción 2: Ver monedas disponibles
+                    System.out.println("Monedas disponibles:");
+                    rates.keySet().forEach(System.out::println);
+                    break;
+
+                case 3:
+                    // Opción 3: Ver historial de conversiones
+                    if (conversionHistoryList.isEmpty()) {
+                        System.out.println("No hay conversiones previas.");
+                    } else {
+                        System.out.println("Historial de conversiones:");
+                        conversionHistoryList.forEach(System.out::println);
+                    }
+                    break;
+
+                case 4:
+                    // Opción 4: Salir
+                    System.out.println("¡Gracias por usar el convertidor de monedas!");
+                    continuar = false;
+                    break;
+
+                default:
+                    System.out.println("Opción no válida.");
+            }
+        }
+
+        scanner.close();
+    }
+}
